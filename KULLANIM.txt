@@ -1,0 +1,26 @@
+HEK / AMORTİSMAN EKLENTİ KONTROLÜ
+=================================
+
+1. Excel'deki süreç numarası sütununu kopyalayın.
+2. Uygulamada "Panodan Yapıştır" düğmesine basın.
+3. HEK Formu Excel dosyasını seçin.
+4. Amortisman Excel dosyasını seçin.
+5. Gerekirse doğru sayfa ve başlık satırını seçin.
+6. "Analizi Başlat" düğmesine basın.
+7. Sonuç Excel dosyasını kaydedeceğiniz yeri seçin.
+
+HEK FORMU SÜTUNLARI
+- AK: Process ID
+- H: Envanter numarası
+- I: Eklenti numarası
+- P: txtKismiCikisOrani
+
+AMORTİSMAN SÜTUNLARI
+- A: Immobilisation
+- B: Numero subsidiaire
+
+Uygulama Amortisman dosyasındaki eşleşen satırların bütün sütunlarını sonuç
+dosyasına aktarır. Numero subsidiaire 0 ana ürün; 1, 2, 3 ve devamı eklentidir.
+
+Windows ilk çalıştırmada bilinmeyen yayıncı uyarısı gösterirse "Ek bilgi" ve
+ardından "Yine de çalıştır" seçilebilir.

@@ -1,0 +1,72 @@
+name: Windows EXE Olustur
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  windows-exe:
+    runs-on: windows-latest
+    steps:
+      - name: Dosyalari al
+        uses: actions/checkout@v5
+
+      - name: Python hazirla
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Gerekli paketleri kur
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt pyinstaller==6.22.2
+
+      - name: Windows uygulamasini olustur
+        run: >-
+          python -m PyInstaller
+          --noconfirm
+          --clean
+          --onefile
+          --windowed
+          --noupx
+          --collect-all openpyxl
+          --add-data "assets/renault-logo.gif;assets"
+          --icon "assets/renault-logo.ico"
+          --name HEKAmortismanKontrol
+          hek_amortisman_kontrol.py
+
+      - name: EXE dosyasini kontrol et
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "dist/HEKAmortismanKontrol.exe")) {
+            throw "HEKAmortismanKontrol.exe olusturulamadi."
+          }
+          Copy-Item "KULLANIM.txt" "dist/KULLANIM.txt"
+          Compress-Archive -Force -Path "dist/HEKAmortismanKontrol.exe", "dist/KULLANIM.txt" -DestinationPath "dist/HEKAmortismanKontrol-Windows.zip"
+
+      - name: Indirilebilir dosya olarak sakla
+        uses: actions/upload-artifact@v6
+        with:
+          name: HEKAmortismanKontrol-Windows
+          path: |
+            dist/HEKAmortismanKontrol.exe
+            dist/HEKAmortismanKontrol-Windows.zip
+          if-no-files-found: error
+
+      - name: Etiketli surumde GitHub Release olustur
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          "dist/HEKAmortismanKontrol.exe"
+          "dist/HEKAmortismanKontrol-Windows.zip"
+          --title "HEK Amortisman Kontrol ${{ github.ref_name }}"
+          --generate-notes

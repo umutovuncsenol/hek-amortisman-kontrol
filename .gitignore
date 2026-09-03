@@ -1,0 +1,10 @@
+.build-venv/
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+.DS_Store
+node_modules
+previews/
+verify_workbook.mjs
