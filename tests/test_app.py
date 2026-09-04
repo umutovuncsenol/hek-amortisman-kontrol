@@ -72,6 +72,7 @@ def make_amortisation(path, unrelated_rows=10000):
 
 
 def run_test():
+    assert (PROJECT / "assets" / "HEK_Amortisman_Ornek_Cikti.xlsx").exists()
     temp_dir = Path(tempfile.mkdtemp(prefix="hek-amort-test-", dir="/private/tmp"))
     hek_path = temp_dir / "HEK_Formu.xlsx"
     amort_path = temp_dir / "Amortisman.xlsx"
@@ -92,6 +93,12 @@ def run_test():
 
     assert result["process_count"] == 3
     assert result["duplicates"] == 1
+    parsed, duplicates = app.parse_process_input("SUREC-001\nSUREC-001\nSUREC-002\tYANLIS-SUTUN")
+    assert [display for _key, display in parsed] == ["SUREC-001"]
+    assert duplicates == 1
+    assert app.process_line_statuses("SUREC-001\nSUREC-001\nSUREC-002\tYANLIS-SUTUN") == [
+        "valid", "duplicate", "invalid"
+    ]
     assert result["inventory_count"] == 1
     assert result["missing_addon_count"] == 1
     summary = result["summary"][0]
@@ -114,6 +121,7 @@ def run_test():
     assert detail.cell(5, detail.max_column - 3).value == "Kalan eklenti"
     assert detail.cell(5, detail.max_column).value == "Hurdalanmak istenmemiş / eksik eklenti"
     assert detail.max_column == 25
+    assert detail.cell(1, detail.max_column - 1).value == "Kısmi Çıkış Oranı (txtKismiCikisOrani)"
     workbook.close()
 
     print(f"TEST BAŞARILI — 10.004 Amortisman satırı {elapsed:.2f} saniyede tarandı")

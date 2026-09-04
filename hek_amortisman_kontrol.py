@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -9,7 +10,7 @@ import tkinter as tk
 from collections import defaultdict
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, ttk
 
 try:
     from openpyxl import Workbook, load_workbook
@@ -39,6 +40,12 @@ GREEN = "#DDF2E3"
 RED = "#FCE1E1"
 ORANGE = "#FDE9C8"
 WHITE = "#FFFFFF"
+GRID = "#CBD5E1"
+MUTED = "#64748B"
+
+IGNORED_PROCESS_HEADERS = {
+    "process id", "processid", "süreç no", "süreç numarası", "surec no", "surec numarasi"
+}
 
 
 def xl_color(color: str) -> str:
@@ -89,13 +96,15 @@ def parse_process_input(text: str):
     values = []
     seen = set()
     duplicates = 0
-    ignored_headers = {"process id", "processid", "süreç no", "süreç numarası", "surec no", "surec numarasi"}
 
     for raw_line in text.replace("\r", "\n").split("\n"):
-        first_cell = raw_line.split("\t", 1)[0].strip()
+        cells = raw_line.split("\t")
+        first_cell = cells[0].strip()
         if not first_cell:
             continue
-        if " ".join(first_cell.split()).casefold() in ignored_headers:
+        if len([cell for cell in cells if cell.strip()]) > 1:
+            continue
+        if " ".join(first_cell.split()).casefold() in IGNORED_PROCESS_HEADERS:
             continue
         key = identifier_key(first_cell)
         if key in seen:
@@ -105,6 +114,32 @@ def parse_process_input(text: str):
         values.append((key, first_cell))
 
     return values, duplicates
+
+
+def process_line_statuses(text: str):
+    """Return one UI status per visible line without restricting ID format."""
+    statuses = []
+    seen = set()
+    for raw_line in text.replace("\r", "\n").split("\n"):
+        cells = raw_line.split("\t")
+        first_cell = cells[0].strip()
+        nonempty_cells = [cell for cell in cells if cell.strip()]
+        normalized = " ".join(first_cell.split()).casefold()
+        if not nonempty_cells:
+            status = "empty"
+        elif len(nonempty_cells) > 1 or not first_cell:
+            status = "invalid"
+        elif normalized in IGNORED_PROCESS_HEADERS:
+            status = "header"
+        else:
+            key = identifier_key(first_cell)
+            if key in seen:
+                status = "duplicate"
+            else:
+                seen.add(key)
+                status = "valid"
+        statuses.append(status)
+    return statuses
 
 
 def ratio_info(value):
@@ -301,7 +336,7 @@ def build_analysis(processes, hek_entries, invalid_hek_rows, missing_processes, 
         if missing_addons:
             problems.append(f"{len(missing_addons)} kalan eklenti var")
         if partial_entries:
-            problems.append("P oranı %100 değil")
+            problems.append("Kısmi Çıkış Oranı (txtKismiCikisOrani) %100 değil")
         status = "Kontrol gerekli" if problems else "Tamam"
 
         summary_rows.append({
@@ -332,7 +367,10 @@ def build_analysis(processes, hek_entries, invalid_hek_rows, missing_processes, 
                     status_text = "Ana ürün - hurdalanmak isteniyor"
                 else:
                     status_text = "Hurdalanmak istenen eklenti"
-                explanation = "P oranı %100 değil" if partial else "HEK Formunda mevcut"
+                explanation = (
+                    "Kısmi Çıkış Oranı (txtKismiCikisOrani) %100 değil"
+                    if partial else "HEK Formunda mevcut"
+                )
                 kind = "partial" if partial else "requested"
             else:
                 requesting_processes = []
@@ -400,7 +438,8 @@ def write_result_workbook(result, output_path: Path):
     summary_headers = [
         "Süreç Numaraları", "Envanter Numarası", "Toplam Eklenti",
         "Hurdalanacak Eklenti", "Hurdalanacak Eklenti No", "Kalan Eklenti",
-        "Kalan Eklenti No", "Eklenti Tamamlanma", "P Kontrolü", "Durum", "Açıklama",
+        "Kalan Eklenti No", "Eklenti Tamamlanma",
+        "Kısmi Çıkış Oranı Kontrolü (txtKismiCikisOrani)", "Durum", "Açıklama",
     ]
     summary.append(summary_headers)
     style_header(summary[1])
@@ -432,7 +471,8 @@ def write_result_workbook(result, output_path: Path):
 
     source_headers = [display_header(value, index) for index, value in enumerate(result["headers"])]
     detail_headers = ["Süreç Numaraları"] + source_headers + [
-        "HEK Talep Durumu", "Talep Eden Süreç(ler)", "txtKismiCikisOrani", "Kontrol Açıklaması"
+        "HEK Talep Durumu", "Talep Eden Süreç(ler)",
+        "Kısmi Çıkış Oranı (txtKismiCikisOrani)", "Kontrol Açıklaması"
     ]
     detail.append(detail_headers)
     style_header(detail[1])
@@ -492,7 +532,7 @@ def write_result_workbook(result, output_path: Path):
 
     unmatched_headers = [
         "Süreç Numarası", "HEK Satırı", "Envanter Numarası", "Eklenti Numarası",
-        "txtKismiCikisOrani", "Açıklama",
+        "Kısmi Çıkış Oranı (txtKismiCikisOrani)", "Açıklama",
     ]
     unmatched.append(unmatched_headers)
     style_header(unmatched[1])
@@ -543,6 +583,100 @@ def run_analysis(process_text, hek_config, amort_config, output_path: Path):
     )
     write_result_workbook(result, output_path)
     return result
+
+
+class ProcessInput(tk.Frame):
+    """Excel-like single-column editor with synchronized row numbers."""
+
+    def __init__(self, master, on_change):
+        super().__init__(master, bg=BLUE, padx=2, pady=2)
+        self.on_change = on_change
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(1, weight=1)
+
+        tk.Label(
+            self, text="SATIR", bg=BLUE, fg=WHITE, font=("TkDefaultFont", 9, "bold"),
+            width=6, pady=5,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 1))
+        tk.Label(
+            self, text="SÜREÇ NUMARASI — Excel'den tek sütun yapıştırın", bg=BLUE, fg=WHITE,
+            font=("TkDefaultFont", 9, "bold"), anchor="w", padx=10, pady=5,
+        ).grid(row=0, column=1, sticky="ew")
+
+        self.line_numbers = tk.Text(
+            self, width=6, height=6, bg="#EEF2F6", fg=MUTED, relief="flat",
+            borderwidth=0, padx=4, pady=6, takefocus=0, cursor="arrow",
+            font=("TkFixedFont", 11), state="disabled", wrap="none",
+        )
+        self.line_numbers.grid(row=1, column=0, sticky="nsew", padx=(0, 1))
+
+        self.text = tk.Text(
+            self, height=6, bg=WHITE, fg=DARK, insertbackground=DARK, relief="flat",
+            borderwidth=0, padx=10, pady=6, undo=True, wrap="none", font=("TkFixedFont", 11),
+        )
+        self.text.grid(row=1, column=1, sticky="nsew")
+        scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._scroll_both)
+        scrollbar.grid(row=1, column=2, sticky="ns")
+        self.text.configure(yscrollcommand=lambda first, last: self._on_text_scroll(scrollbar, first, last))
+
+        self.text.tag_configure("duplicate", background="#FFF1A8")
+        self.text.tag_configure("invalid", background="#FFD6D6", foreground="#9B1C1C")
+        self.text.tag_configure("header", background=PALE_BLUE, foreground=BLUE)
+        self.text.bind("<<Modified>>", self._content_changed)
+        self.text.bind("<MouseWheel>", lambda _event: self.after_idle(self._sync_gutter))
+        self.text.bind("<Button-4>", lambda _event: self.after_idle(self._sync_gutter))
+        self.text.bind("<Button-5>", lambda _event: self.after_idle(self._sync_gutter))
+        self.text.edit_modified(False)
+        self.refresh()
+
+    def _scroll_both(self, *args):
+        self.text.yview(*args)
+        self.line_numbers.yview(*args)
+
+    def _on_text_scroll(self, scrollbar, first, last):
+        scrollbar.set(first, last)
+        self.line_numbers.yview_moveto(first)
+
+    def _sync_gutter(self):
+        self.line_numbers.yview_moveto(self.text.yview()[0])
+
+    def _content_changed(self, _event=None):
+        if not self.text.edit_modified():
+            return
+        self.text.edit_modified(False)
+        self.refresh()
+        self.on_change()
+
+    def refresh(self):
+        content = self.get()
+        statuses = process_line_statuses(content)
+        visible_count = max(1, len(content.split("\n")))
+        numbers = "\n".join(str(number) for number in range(1, visible_count + 1))
+
+        self.line_numbers.configure(state="normal")
+        self.line_numbers.delete("1.0", "end")
+        self.line_numbers.insert("1.0", numbers)
+        self.line_numbers.configure(state="disabled")
+
+        for tag in ("duplicate", "invalid", "header"):
+            self.text.tag_remove(tag, "1.0", "end")
+        for line_number, status in enumerate(statuses, start=1):
+            if status in {"duplicate", "invalid", "header"}:
+                self.text.tag_add(status, f"{line_number}.0", f"{line_number}.end")
+        self.after_idle(self._sync_gutter)
+
+    def get(self):
+        return self.text.get("1.0", "end-1c")
+
+    def replace(self, value: str):
+        self.text.delete("1.0", "end")
+        self.text.insert("1.0", value)
+        self.text.edit_modified(False)
+        self.refresh()
+        self.on_change()
+
+    def clear(self):
+        self.replace("")
 
 
 class ExcelCard(ttk.LabelFrame):
@@ -613,7 +747,7 @@ class ExcelCard(ttk.LabelFrame):
                 (HEK_PROCESS_COL, "AK / Process ID"),
                 (HEK_INVENTORY_COL, "H / Envanter"),
                 (HEK_SUBNUMBER_COL, "I / Eklenti"),
-                (HEK_RATIO_COL, "P / txtKismiCikisOrani"),
+                (HEK_RATIO_COL, "Kısmi Çıkış Oranı / txtKismiCikisOrani"),
             ]
         else:
             required = [
@@ -671,16 +805,15 @@ class App(tk.Tk):
             text="Süreçleri bulur, envanter eklentilerini kontrol eder ve düzenli Excel raporu üretir.",
             style="Subtitle.TLabel",
         ).grid(row=1, column=1, sticky="w", pady=(4, 0))
+        ttk.Button(header, text="?  YARDIM", command=self.show_help, style="Help.TButton").grid(
+            row=0, column=2, rowspan=2, sticky="e", padx=(16, 0)
+        )
 
         process_card = ttk.LabelFrame(shell, text="1  Süreç Numaraları", padding=12, style="Card.TLabelframe")
         process_card.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         process_card.columnconfigure(0, weight=1)
-        self.process_text = scrolledtext.ScrolledText(
-            process_card, height=6, font=("TkDefaultFont", 11), wrap="none",
-            bg=WHITE, fg=DARK, insertbackground=DARK, relief="flat", borderwidth=1,
-        )
-        self.process_text.grid(row=0, column=0, columnspan=3, sticky="ew")
-        self.process_text.bind("<KeyRelease>", lambda _event: self.update_process_count())
+        self.process_input = ProcessInput(process_card, self.update_process_count)
+        self.process_input.grid(row=0, column=0, columnspan=3, sticky="ew")
         ttk.Button(process_card, text="Panodan Yapıştır", command=self.paste_processes,
                    style="Yellow.TButton").grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Button(process_card, text="Temizle", command=self.clear_processes).grid(
@@ -743,6 +876,15 @@ class App(tk.Tk):
         style.configure("ResultTitle.TLabel", background=WHITE, foreground=BLUE,
                         font=("TkDefaultFont", 15, "bold"))
         style.configure("Result.TLabel", background=WHITE, foreground=DARK, font=("TkDefaultFont", 11))
+        style.configure("HelpTitle.TLabel", background=PALE_YELLOW, foreground=BLUE,
+                        font=("TkDefaultFont", 18, "bold"))
+        style.configure("HelpText.TLabel", background=PALE_YELLOW, foreground=DARK,
+                        font=("TkDefaultFont", 10))
+        style.configure("HelpCard.TFrame", background=WHITE, relief="solid", borderwidth=1)
+        style.configure("HelpSection.TLabel", background=WHITE, foreground=BLUE,
+                        font=("TkDefaultFont", 11, "bold"))
+        style.configure("HelpCardText.TLabel", background=WHITE, foreground=DARK,
+                        font=("TkDefaultFont", 10))
         style.configure("Primary.TButton", background=BLUE, foreground=WHITE,
                         font=("TkDefaultFont", 12, "bold"), padding=(18, 10))
         style.map("Primary.TButton", background=[("active", "#1F527F")])
@@ -750,16 +892,19 @@ class App(tk.Tk):
         style.map("Yellow.TButton", background=[("active", "#E8C62E")])
         style.configure("Blue.TButton", background=BLUE, foreground=WHITE)
         style.map("Blue.TButton", background=[("active", "#1F527F")])
+        style.configure("Help.TButton", background=WHITE, foreground=BLUE,
+                        font=("TkDefaultFont", 10, "bold"), padding=(12, 7))
+        style.map("Help.TButton", background=[("active", PALE_BLUE)])
 
     def _load_logo(self, parent):
         try:
-            image = tk.PhotoImage(file=str(resource_path("assets/renault-logo.gif")))
-            self.icon_image = image
-            self.logo_image = image.subsample(4, 4)
-            logo_frame = tk.Frame(parent, bg=WHITE, padx=5, pady=4)
-            logo_frame.grid(row=0, column=0, rowspan=2, padx=(0, 16))
-            tk.Label(logo_frame, image=self.logo_image, bg=WHITE, borderwidth=0).pack()
-            self.iconphoto(True, image)
+            header_image = tk.PhotoImage(file=str(resource_path("assets/renault-logo-header.png")))
+            self.icon_image = tk.PhotoImage(file=str(resource_path("assets/renault-logo.png")))
+            self.logo_image = header_image.subsample(3, 3)
+            tk.Label(parent, image=self.logo_image, bg=BLUE, borderwidth=0).grid(
+                row=0, column=0, rowspan=2, padx=(0, 16)
+            )
+            self.iconphoto(True, self.icon_image)
         except Exception:
             ttk.Label(parent, text="◉", style="Title.TLabel", font=("TkDefaultFont", 30, "bold")).grid(
                 row=0, column=0, rowspan=2, padx=(0, 16)
@@ -771,25 +916,119 @@ class App(tk.Tk):
         except tk.TclError:
             messagebox.showinfo("Pano boş", "Panoda yapıştırılabilecek metin bulunamadı.")
             return
-        self.process_text.delete("1.0", "end")
-        self.process_text.insert("1.0", value)
-        self.update_process_count()
+        self.process_input.replace(value)
 
     def clear_processes(self):
-        self.process_text.delete("1.0", "end")
-        self.update_process_count()
+        self.process_input.clear()
 
     def update_process_count(self):
-        processes, duplicates = parse_process_input(self.process_text.get("1.0", "end"))
+        process_text = self.process_input.get()
+        processes, duplicates = parse_process_input(process_text)
+        invalid = process_line_statuses(process_text).count("invalid")
         if not processes:
-            self.process_count_var.set("Süreç numaralarını Excel'den kopyalayıp buraya yapıştırın")
+            if invalid:
+                self.process_count_var.set(f"⚠ {invalid} satırda birden fazla sütun var")
+            else:
+                self.process_count_var.set("Süreç numaralarını Excel'den tek sütun olarak yapıştırın")
         else:
-            suffix = f" • {duplicates} tekrar çıkarıldı" if duplicates else ""
-            self.process_count_var.set(f"{len(processes)} benzersiz süreç{suffix}")
+            notes = [f"{len(processes)} benzersiz süreç"]
+            if duplicates:
+                notes.append(f"{duplicates} tekrar sarı işaretlendi")
+            if invalid:
+                notes.append(f"{invalid} çok sütunlu satır kırmızı işaretlendi")
+            self.process_count_var.set(" • ".join(notes))
+
+    def show_help(self):
+        dialog = tk.Toplevel(self)
+        dialog.title("Yardım — Sonuç Excel'i nasıl okunur?")
+        dialog.geometry("720x610")
+        dialog.minsize(620, 520)
+        dialog.configure(bg=PALE_YELLOW)
+        dialog.transient(self)
+        dialog.grab_set()
+
+        panel = ttk.Frame(dialog, padding=20, style="Shell.TFrame")
+        panel.pack(fill="both", expand=True)
+        panel.columnconfigure(0, weight=1)
+        ttk.Label(panel, text="Sonuç Excel'i nasıl okunur?", style="HelpTitle.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            panel,
+            text=(
+                "Yardım dosyası, uygulamanın ürettiği üç sonuç sayfasını örnek verilerle gösterir. "
+                "Açıklamalar sayfasında her sonuç sütununun ve satır türünün anlamı bulunur."
+            ),
+            style="HelpText.TLabel", wraplength=660, justify="left",
+        ).grid(row=1, column=0, sticky="w", pady=(10, 16))
+
+        sections = [
+            (
+                "Kontrol Özeti",
+                "Her satır bir envanter grubunu gösterir. Hurdalanacak Eklenti talepte bulunanları, "
+                "Kalan Eklenti ise Amortisman dosyasında olup hurdalama talebinde bulunmayanları gösterir.",
+            ),
+            (
+                "Filtrelenmiş Amortisman",
+                "Her satır bir ana ürün veya eklentidir. Amortisman dosyasının bütün kaynak sütunları "
+                "korunur; sağ tarafta HEK talep durumu, talep eden süreç ve txtKismiCikisOrani yer alır.",
+            ),
+            (
+                "Eşleşmeyen Kayıtlar",
+                "HEK Formunda envanteri veya eklenti numarası eksik olan, Amortisman dosyasında "
+                "bulunamayan ya da süreç numarası HEK Formunda bulunmayan kayıtları gösterir.",
+            ),
+            (
+                "Renkler ve oran",
+                "Yeşil satırlar uygun, turuncu satırlar txtKismiCikisOrani %100 olmadığı için kontrol "
+                "gerektiren, kırmızı satırlar ise kalan veya eşleşmeyen kayıtları gösterir.",
+            ),
+        ]
+        next_row = 2
+        for title, body in sections:
+            card = ttk.Frame(panel, padding=12, style="HelpCard.TFrame")
+            card.grid(row=next_row, column=0, sticky="ew", pady=(0, 8))
+            card.columnconfigure(0, weight=1)
+            ttk.Label(card, text=title, style="HelpSection.TLabel").grid(row=0, column=0, sticky="w")
+            ttk.Label(card, text=body, style="HelpCardText.TLabel", wraplength=625,
+                      justify="left").grid(row=1, column=0, sticky="w", pady=(4, 0))
+            next_row += 1
+
+        buttons = ttk.Frame(panel, style="Shell.TFrame")
+        buttons.grid(row=next_row, column=0, sticky="ew", pady=(10, 0))
+        ttk.Button(buttons, text="ÖRNEK SONUÇ EXCEL'İNİ İNDİR", command=self.download_example_workbook,
+                   style="Primary.TButton").pack(side="left")
+        ttk.Button(buttons, text="Kapat", command=dialog.destroy).pack(side="right")
+
+    def download_example_workbook(self):
+        source = resource_path("assets/HEK_Amortisman_Ornek_Cikti.xlsx")
+        if not source.exists():
+            messagebox.showerror("Örnek dosya bulunamadı", "Örnek Excel dosyası uygulamaya eklenememiş.")
+            return
+        filename = filedialog.asksaveasfilename(
+            title="Örnek Excel dosyasını kaydet",
+            defaultextension=".xlsx",
+            initialfile="HEK_Amortisman_Ornek_Cikti.xlsx",
+            filetypes=[("Excel dosyası", "*.xlsx")],
+        )
+        if not filename:
+            return
+        try:
+            shutil.copyfile(source, filename)
+        except Exception as exc:
+            messagebox.showerror("Dosya kaydedilemedi", f"Örnek Excel dosyası kaydedilemedi:\n{exc}")
+            return
+        messagebox.showinfo("Örnek dosya hazır", f"Örnek Excel dosyası kaydedildi:\n{filename}")
 
     def start_analysis(self):
         try:
-            process_text = self.process_text.get("1.0", "end")
+            process_text = self.process_input.get()
+            invalid_count = process_line_statuses(process_text).count("invalid")
+            if invalid_count:
+                raise ValueError(
+                    f"{invalid_count} satırda birden fazla Excel sütunu var. "
+                    "Yalnızca süreç numarası sütununu kopyalayın."
+                )
             processes, _duplicates = parse_process_input(process_text)
             if not processes:
                 raise ValueError("Süreç numaralarını Excel'den kopyalayıp yapıştırın.")
@@ -851,7 +1090,8 @@ class App(tk.Tk):
             f"✓ {matched_processes}/{result['process_count']} süreç HEK Formunda bulundu\n"
             f"✓ {result['inventory_count']} envanter numarası analiz edildi\n"
             f"⚠ {result['missing_addon_count']} kalan eklenti bulundu\n"
-            f"⚠ {result['partial_inventory_count']} envanter grubunda P oranı %100 değil\n"
+            f"⚠ {result['partial_inventory_count']} envanter grubunda Kısmi Çıkış Oranı "
+            f"(txtKismiCikisOrani) %100 değil\n"
             f"⚠ {len(result['unmatched'])} eşleşmeyen veya eksik kayıt var\n\n"
             f"Excel kaydedildi: {output_path}"
         )

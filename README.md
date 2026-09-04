@@ -2,13 +2,13 @@
 
 HEK Formu ve Amortisman Excel dosyalarını süreç numaralarına göre eşleştirir.
 
-Uygulama sarı–mavi arayüz kullanır; başlık ve Windows uygulama ikonunda Renault
-logosu bulunur.
+Uygulama sarı–mavi arayüz kullanır; başlıkta şeffaf PNG Renault logosu ve
+Windows uygulama ikonunda şeffaf Renault simgesi bulunur.
 
 ## Girdiler
 
-1. Excel'den kopyalanıp yapıştırılan süreç numaraları
-2. HEK Formu (`AK`: Process ID, `H`: Envanter, `I`: Eklenti, `P`: txtKismiCikisOrani)
+1. Excel'den tek sütun olarak kopyalanıp satır numaralı alana yapıştırılan süreç numaraları
+2. HEK Formu (`AK`: Process ID, `H`: Envanter, `I`: Eklenti, `P`: Kısmi Çıkış Oranı / `txtKismiCikisOrani`)
 3. Amortisman dosyası (`A`: Immobilisation, `B`: Numero subsidiaire)
 
 ## Çıktı

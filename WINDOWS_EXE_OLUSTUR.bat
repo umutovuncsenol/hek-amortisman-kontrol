@@ -27,7 +27,7 @@ if errorlevel 1 goto :error
 python -m pip install -r requirements.txt pyinstaller==6.22.2
 if errorlevel 1 goto :error
 
-python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx --collect-all openpyxl --add-data "assets\renault-logo.gif;assets" --icon "assets\renault-logo.ico" --name HEKAmortismanKontrol hek_amortisman_kontrol.py
+python -m PyInstaller --noconfirm --clean --onefile --windowed --noupx --collect-all openpyxl --add-data "assets\renault-logo-header.png;assets" --add-data "assets\renault-logo.png;assets" --add-data "assets\HEK_Amortisman_Ornek_Cikti.xlsx;assets" --icon "assets\renault-logo.ico" --name HEKAmortismanKontrol hek_amortisman_kontrol.py
 if errorlevel 1 goto :error
 
 echo.
